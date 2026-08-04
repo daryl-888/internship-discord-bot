@@ -49,6 +49,23 @@ class PersonalMatchResult:
     source: str  # "llm" or "fallback"
 
 
+def format_profile_for_prompt(profile: Dict[str, str]) -> str:
+    """Turn a structured member profile (skills/target_roles/education_level/
+    location_pref) into one descriptive line for the match prompt below.
+
+    Gives the model cleanly labeled fields to reason over instead of a single
+    free-text blurb the member typed themselves.
+    """
+    labels = (
+        ("skills", "Skills/interests"),
+        ("target_roles", "Target roles"),
+        ("education_level", "Education level"),
+        ("location_pref", "Location preference"),
+    )
+    parts = [f"{label}: {profile[field]}" for field, label in labels if profile.get(field)]
+    return ". ".join(parts) if parts else "No profile details provided"
+
+
 def _fallback(reason: str) -> PersonalMatchResult:
     return PersonalMatchResult(match_score=NEUTRAL_QUALITY_SCORE, reason=reason, source="fallback")
 

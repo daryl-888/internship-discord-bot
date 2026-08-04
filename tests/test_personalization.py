@@ -59,3 +59,22 @@ def test_score_personal_match_includes_profile_blurb_in_prompt():
         personalization.score_personal_match(_job(), "I only want remote ML roles", {})
 
     assert "I only want remote ML roles" in seen_prompts[0]
+
+
+def test_format_profile_for_prompt_includes_only_filled_fields():
+    text = personalization.format_profile_for_prompt(
+        {"skills": "Python, backend", "target_roles": "", "education_level": "Sophomore", "location_pref": ""}
+    )
+
+    assert "Skills/interests: Python, backend" in text
+    assert "Education level: Sophomore" in text
+    assert "Target roles" not in text
+    assert "Location preference" not in text
+
+
+def test_format_profile_for_prompt_handles_fully_empty_profile():
+    text = personalization.format_profile_for_prompt(
+        {"skills": "", "target_roles": "", "education_level": "", "location_pref": ""}
+    )
+
+    assert text == "No profile details provided"

@@ -116,11 +116,18 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS member_profiles (
                 user_id TEXT PRIMARY KEY,
-                blurb TEXT NOT NULL,
+                skills TEXT,
+                target_roles TEXT,
+                education_level TEXT,
+                location_pref TEXT,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        _ensure_column(conn, "member_profiles", "skills", "TEXT")
+        _ensure_column(conn, "member_profiles", "target_roles", "TEXT")
+        _ensure_column(conn, "member_profiles", "education_level", "TEXT")
+        _ensure_column(conn, "member_profiles", "location_pref", "TEXT")
         _ensure_column(conn, "internships", "uploaded_at", "TEXT")
         _ensure_column(conn, "internships", "quality_score", "INTEGER")
         _ensure_column(conn, "internships", "llm_reason", "TEXT")
@@ -305,35 +312,60 @@ def stats() -> Dict[str, Any]:
     }
 
 
-def set_member_profile(user_id: str, blurb: str) -> None:
-    """Save (or replace) a premium member's short interest blurb."""
+_PROFILE_FIELDS = ("skills", "target_roles", "education_level", "location_pref")
+
+
+def set_member_profile(
+    user_id: str,
+    *,
+    skills: str = "",
+    target_roles: str = "",
+    education_level: str = "",
+    location_pref: str = "",
+) -> None:
+    """Save (or replace) a premium member's structured interest profile."""
     init_db()
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO member_profiles(user_id, blurb, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET blurb = excluded.blurb, updated_at = excluded.updated_at
+            INSERT INTO member_profiles(
+                user_id, skills, target_roles, education_level, location_pref, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                skills = excluded.skills,
+                target_roles = excluded.target_roles,
+                education_level = excluded.education_level,
+                location_pref = excluded.location_pref,
+                updated_at = excluded.updated_at
             """,
-            (str(user_id), blurb, now_iso()),
+            (str(user_id), skills, target_roles, education_level, location_pref, now_iso()),
         )
         conn.commit()
 
 
-def get_member_profile(user_id: str) -> Optional[str]:
+def get_member_profile(user_id: str) -> Optional[Dict[str, str]]:
     init_db()
     with _connect() as conn:
         row = conn.execute(
-            "SELECT blurb FROM member_profiles WHERE user_id = ?", (str(user_id),)
+            "SELECT skills, target_roles, education_level, location_pref "
+            "FROM member_profiles WHERE user_id = ?",
+            (str(user_id),),
         ).fetchone()
-    return row["blurb"] if row else None
+    return {field: (row[field] or "") for field in _PROFILE_FIELDS} if row else None
 
 
-def list_member_profiles() -> Dict[str, str]:
-    """Return {user_id: blurb} for every member who has set a profile."""
+def list_member_profiles() -> Dict[str, Dict[str, str]]:
+    """Return {user_id: {skills, target_roles, education_level, location_pref}}
+    for every member who has set a profile."""
     init_db()
     with _connect() as conn:
-        rows = conn.execute("SELECT user_id, blurb FROM member_profiles").fetchall()
-    return {row["user_id"]: row["blurb"] for row in rows}
+        rows = conn.execute(
+            "SELECT user_id, skills, target_roles, education_level, location_pref FROM member_profiles"
+        ).fetchall()
+    return {
+        row["user_id"]: {field: (row[field] or "") for field in _PROFILE_FIELDS}
+        for row in rows
+    }
 
 
 _PRESERVED_STATUSES = {"active", "applied", "saved"}

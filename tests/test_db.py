@@ -94,21 +94,38 @@ def test_member_profile_defaults_to_none():
 
 
 def test_set_member_profile_then_get():
-    db.set_member_profile("111", "Backend/Go internships, remote OK")
-    assert db.get_member_profile("111") == "Backend/Go internships, remote OK"
+    db.set_member_profile(
+        "111", skills="Backend/Go", target_roles="SWE intern", education_level="Sophomore", location_pref="Remote OK"
+    )
+    assert db.get_member_profile("111") == {
+        "skills": "Backend/Go",
+        "target_roles": "SWE intern",
+        "education_level": "Sophomore",
+        "location_pref": "Remote OK",
+    }
 
 
 def test_set_member_profile_overwrites_previous_value():
-    db.set_member_profile("111", "First blurb")
-    db.set_member_profile("111", "Updated blurb")
-    assert db.get_member_profile("111") == "Updated blurb"
+    db.set_member_profile("111", skills="First")
+    db.set_member_profile("111", skills="Updated")
+    assert db.get_member_profile("111")["skills"] == "Updated"
+
+
+def test_set_member_profile_defaults_unset_fields_to_empty_string():
+    db.set_member_profile("111", skills="Backend/Go")
+    profile = db.get_member_profile("111")
+    assert profile["target_roles"] == ""
+    assert profile["education_level"] == ""
+    assert profile["location_pref"] == ""
 
 
 def test_list_member_profiles_returns_all_saved_profiles():
-    db.set_member_profile("111", "Backend/Go")
-    db.set_member_profile("222", "Frontend/React")
+    db.set_member_profile("111", skills="Backend/Go")
+    db.set_member_profile("222", skills="Frontend/React")
 
-    assert db.list_member_profiles() == {"111": "Backend/Go", "222": "Frontend/React"}
+    profiles = db.list_member_profiles()
+    assert profiles["111"]["skills"] == "Backend/Go"
+    assert profiles["222"]["skills"] == "Frontend/React"
 
 
 def _insert_aged_row(status: str, days_old: int, dedupe_suffix: str) -> None:

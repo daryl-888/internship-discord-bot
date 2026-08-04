@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from database.db import init_db, set_state, update_internship_relevance, upsert_internship
 from scraper.github_scraper import scrape_github_readme
-from utils.filters import passes_filters
+from utils.filters import passes_age_filter, passes_filters
 from utils.relevance import classify_relevance
 from utils.source_store import get_enabled_sources, update_source_fetch_cache
 
@@ -21,6 +21,7 @@ def run_scan(config: Dict[str, Any]) -> Dict[str, Any]:
     sources = get_enabled_sources()
     include_keywords = config.get("include_keywords", [])
     exclude_keywords = config.get("exclude_keywords", [])
+    max_posting_age_days = config.get("max_posting_age_days", 3)
     llm_filter_enabled = bool(config.get("llm_filter_enabled", False))
     llm_min_quality_score = int(config.get("llm_min_quality_score", 1))
 
@@ -49,6 +50,8 @@ def run_scan(config: Dict[str, Any]) -> Dict[str, Any]:
 
             for internship in internships:
                 if not passes_filters(internship, include_keywords, exclude_keywords):
+                    continue
+                if not passes_age_filter(internship, max_posting_age_days):
                     continue
                 total_after_filters += 1
                 db_id, is_new = upsert_internship(internship)

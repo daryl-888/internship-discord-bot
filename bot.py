@@ -32,7 +32,7 @@ from scraper.jobright_manual import build_manual_jobright_job
 from scraper.linkedin_manual import build_manual_linkedin_job
 from utils.config_loader import load_config, save_config
 from utils.formatting import chunk_list, internship_to_embed, personal_match_to_embed
-from utils.personalization import score_personal_match
+from utils.personalization import format_profile_for_prompt, score_personal_match
 from utils.relevance import NEUTRAL_QUALITY_SCORE
 from utils.source_store import add_source, load_sources, remove_source
 
@@ -134,11 +134,12 @@ def _quality_score(job: dict) -> int:
 
 
 def build_personal_digests(
-    new_jobs: List[dict], profiles_by_user_id: Dict[str, str], config: dict
+    new_jobs: List[dict], profiles_by_user_id: Dict[str, Dict[str, str]], config: dict
 ) -> Dict[str, List[dict]]:
-    """Score this scan's new jobs against each premium member's profile blurb
-    and keep their top matches. Does many blocking Ollama calls, so callers
-    should run this via asyncio.to_thread instead of awaiting it directly.
+    """Score this scan's new jobs against each premium member's structured
+    profile and keep their top matches. Does many blocking Ollama calls, so
+    callers should run this via asyncio.to_thread instead of awaiting it
+    directly.
     """
     if not new_jobs or not profiles_by_user_id:
         return {}
@@ -147,7 +148,8 @@ def build_personal_digests(
     min_score = int(config.get("personal_digest_min_score", 4))
     digests: Dict[str, List[dict]] = {}
 
-    for user_id, blurb in profiles_by_user_id.items():
+    for user_id, profile in profiles_by_user_id.items():
+        blurb = format_profile_for_prompt(profile)
         matches = []
         for job in new_jobs:
             verdict = score_personal_match(job, blurb, config)
@@ -326,7 +328,16 @@ async def storage_maintenance() -> None:
 
 
 @bot.tree.command(name="scan", description="Manually scan all enabled internship sources.")
+@app_commands.guild_only()
 async def scan_command(interaction: discord.Interaction) -> None:
+    member = interaction.user
+    if not isinstance(member, discord.Member) or not is_premium_member(member):
+        await interaction.response.send_message(
+            "Manual scanning is a premium-member feature. Ask an officer about premium membership.",
+            ephemeral=True,
+        )
+        return
+
     await interaction.response.defer(ephemeral=True, thinking=True)
     result = await scan_and_post()
     await interaction.followup.send(
@@ -342,6 +353,8 @@ async def scan_command(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="add_source", description="Add a GitHub internship README source URL.")
 @app_commands.describe(url="GitHub repository or README URL")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def add_source_command(interaction: discord.Interaction, url: str) -> None:
     if "github.com" not in url and "raw.githubusercontent.com" not in url:
         await interaction.response.send_message(
@@ -357,6 +370,8 @@ async def add_source_command(interaction: discord.Interaction, url: str) -> None
 
 
 @bot.tree.command(name="list_sources", description="Show all saved internship sources.")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def list_sources_command(interaction: discord.Interaction) -> None:
     sources = load_sources()
     if not sources:
@@ -376,6 +391,8 @@ async def list_sources_command(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="remove_source", description="Remove a source by ID or exact URL.")
 @app_commands.describe(url_or_id="Source ID from /list_sources or the exact URL")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def remove_source_command(interaction: discord.Interaction, url_or_id: str) -> None:
     removed = remove_source(url_or_id)
     if removed:
@@ -385,6 +402,8 @@ async def remove_source_command(interaction: discord.Interaction, url_or_id: str
 
 
 @bot.tree.command(name="set_channel", description="Set this channel as the internship posting channel.")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def set_channel_command(interaction: discord.Interaction) -> None:
     config["discord_channel_id"] = str(interaction.channel_id)
     save_config(config)
@@ -411,15 +430,51 @@ async def set_premium_role_command(interaction: discord.Interaction, role: disco
     )
 
 
+class ProfileModal(discord.ui.Modal, title="Set Your Internship Profile"):
+    skills = discord.ui.TextInput(
+        label="Skills / interests",
+        placeholder="e.g. Python, backend, GPU/CUDA, machine learning",
+        max_length=200,
+    )
+    target_roles = discord.ui.TextInput(
+        label="Target roles",
+        placeholder="e.g. SWE intern, data science intern",
+        max_length=200,
+        required=False,
+    )
+    education_level = discord.ui.TextInput(
+        label="Education level / year",
+        placeholder="e.g. Sophomore, Junior, Master's",
+        max_length=100,
+        required=False,
+    )
+    location_pref = discord.ui.TextInput(
+        label="Location preference",
+        placeholder="e.g. Remote OK, Bay Area, Austin TX",
+        max_length=150,
+        required=False,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        set_member_profile(
+            str(interaction.user.id),
+            skills=str(self.skills).strip(),
+            target_roles=str(self.target_roles).strip(),
+            education_level=str(self.education_level).strip(),
+            location_pref=str(self.location_pref).strip(),
+        )
+        await interaction.response.send_message(
+            "Saved. You'll get a personalized DM after each scan highlighting your best matches.",
+            ephemeral=True,
+        )
+
+
 @bot.tree.command(
     name="set_profile",
-    description="Premium members: set your internship interests for a personalized DM digest.",
-)
-@app_commands.describe(
-    blurb="1-3 sentences: skills, interests, location, level (e.g. 'Backend/Go, remote OK, sophomore')"
+    description="Premium members: set your structured internship profile for personalized matching.",
 )
 @app_commands.guild_only()
-async def set_profile_command(interaction: discord.Interaction, blurb: str) -> None:
+async def set_profile_command(interaction: discord.Interaction) -> None:
     member = interaction.user
     if not isinstance(member, discord.Member) or not is_premium_member(member):
         await interaction.response.send_message(
@@ -429,16 +484,13 @@ async def set_profile_command(interaction: discord.Interaction, blurb: str) -> N
         )
         return
 
-    blurb = blurb.strip()
-    if not blurb:
-        await interaction.response.send_message("Profile can't be empty.", ephemeral=True)
-        return
-
-    set_member_profile(str(member.id), blurb)
-    await interaction.response.send_message(
-        "Saved. You'll get a personalized DM after each scan highlighting your best matches.",
-        ephemeral=True,
-    )
+    modal = ProfileModal()
+    existing = get_member_profile(str(member.id)) or {}
+    modal.skills.default = existing.get("skills", "")
+    modal.target_roles.default = existing.get("target_roles", "")
+    modal.education_level.default = existing.get("education_level", "")
+    modal.location_pref.default = existing.get("location_pref", "")
+    await interaction.response.send_modal(modal)
 
 
 @bot.tree.command(name="my_profile", description="Show your saved internship interest profile.")
@@ -446,11 +498,18 @@ async def set_profile_command(interaction: discord.Interaction, blurb: str) -> N
 async def my_profile_command(interaction: discord.Interaction) -> None:
     member = interaction.user
     premium = isinstance(member, discord.Member) and is_premium_member(member)
-    blurb = get_member_profile(str(interaction.user.id))
+    profile = get_member_profile(str(interaction.user.id))
 
     lines = [f"Premium member: `{premium}`"]
-    if blurb:
-        lines.append(f"Saved profile: {blurb}")
+    if profile and any(profile.values()):
+        if profile.get("skills"):
+            lines.append(f"Skills/interests: {profile['skills']}")
+        if profile.get("target_roles"):
+            lines.append(f"Target roles: {profile['target_roles']}")
+        if profile.get("education_level"):
+            lines.append(f"Education level: {profile['education_level']}")
+        if profile.get("location_pref"):
+            lines.append(f"Location preference: {profile['location_pref']}")
     elif premium:
         lines.append("No profile saved yet. Use `/set_profile` to add one.")
     else:
@@ -481,7 +540,8 @@ async def status_command(interaction: discord.Interaction) -> None:
         f"Unposted jobs: `{current_stats['unposted']}`\n"
         f"Applied jobs: `{current_stats['applied']}`\n"
         f"Database size: `{db_size_mb:.2f} MB`\n"
-        f"Data retention: `{config.get('data_retention_days', 180)}` days",
+        f"Data retention: `{config.get('data_retention_days', 180)}` days\n"
+        f"Max posting age: `{config.get('max_posting_age_days', 3)}` days",
         ephemeral=True,
     )
 
@@ -494,6 +554,8 @@ async def status_command(interaction: discord.Interaction) -> None:
     title="Role title",
     location="Location",
 )
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def add_manual_job_command(
     interaction: discord.Interaction,
     source: str,
@@ -528,15 +590,16 @@ async def add_manual_job_command(
 async def help_command(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(
         "**Commands**\n"
-        "`/scan` — manually scan all enabled GitHub sources\n"
-        "`/add_source <url>` — add a GitHub internship repo/README\n"
-        "`/list_sources` — show saved sources\n"
-        "`/remove_source <url_or_id>` — remove a source\n"
-        "`/set_channel` — set this channel as the posting channel\n"
+        "`/scan` — premium members: manually scan all enabled GitHub sources\n"
+        "`/add_source <url>` — admin: add a GitHub internship repo/README\n"
+        "`/list_sources` — admin: show saved sources\n"
+        "`/remove_source <url_or_id>` — admin: remove a source\n"
+        "`/set_channel` — admin: set this channel as the posting channel\n"
         "`/status` — show bot status and database stats\n"
-        "`/add_manual_job <source> <url> [company] [title] [location]` — save LinkedIn/Jobright links manually\n"
+        "`/add_manual_job <source> <url> [company] [title] [location]` — admin: save LinkedIn/Jobright links manually\n"
         "`/set_premium_role <role>` — admin: set which role gets personalized DM digests\n"
-        "`/set_profile <blurb>` — premium members: set your interests for personalized matching\n"
+        "`/set_profile` — premium members: fill out a short form (skills, target roles, "
+        "education level, location) for personalized matching\n"
         "`/my_profile` — show your saved profile and premium status\n"
         "`/help` — show this message",
         ephemeral=True,

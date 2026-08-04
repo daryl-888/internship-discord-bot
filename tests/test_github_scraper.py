@@ -93,6 +93,130 @@ def test_rows_missing_company_or_title_are_skipped():
     assert internships == []
 
 
+def test_parse_html_table_basic():
+    markdown = """
+## Software Engineering Internship Roles
+
+<table>
+<thead>
+<tr>
+<th>Company</th>
+<th>Role</th>
+<th>Location</th>
+<th>Application</th>
+<th>Age</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><a href="https://simplify.jobs/c/Acme?utm_source=GHList">Acme Corp</a></strong></td>
+<td>Software Engineer Intern</td>
+<td>Austin, TX</td>
+<td><div align="center"><a href="https://acme.example/apply?ref=x"><img src="https://i.imgur.com/fbjwDvo.png" width="50" alt="Apply"></a> <a href="https://simplify.jobs/p/abc?utm_source=GHList"><img src="https://i.imgur.com/aVnQdox.png" width="26" alt="Simplify"></a></div></td>
+<td>2d</td>
+</tr>
+</tbody>
+</table>
+""".strip()
+
+    internships = gs.parse_markdown_tables(markdown, source_url=SOURCE_URL)
+
+    assert len(internships) == 1
+    job = internships[0]
+    assert job["company"] == "Acme Corp"
+    assert job["title"] == "Software Engineer Intern"
+    assert job["location"] == "Austin, TX"
+    assert job["application_url"] == "https://acme.example/apply?ref=x"
+    assert job["uploaded_at"] == "2d"
+    assert job["source_url"] == SOURCE_URL
+
+
+def test_parse_html_table_continuation_row_arrow_inherits_company():
+    markdown = """
+<table>
+<thead>
+<tr><th>Company</th><th>Role</th><th>Location</th><th>Application</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><a href="https://simplify.jobs/c/Acme">Acme Corp</a></strong></td>
+<td>Backend Intern</td>
+<td>Remote</td>
+<td><a href="https://acme.example/backend">Apply</a></td>
+</tr>
+<tr>
+<td>↳</td>
+<td>Frontend Intern</td>
+<td>NYC</td>
+<td><a href="https://acme.example/frontend">Apply</a></td>
+</tr>
+</tbody>
+</table>
+""".strip()
+
+    internships = gs.parse_markdown_tables(markdown, source_url=SOURCE_URL)
+
+    assert len(internships) == 2
+    assert internships[1]["company"] == "Acme Corp"
+    assert internships[1]["title"] == "Frontend Intern"
+
+
+def test_parse_html_table_multi_location_details_cell():
+    markdown = """
+<table>
+<thead><tr><th>Company</th><th>Role</th><th>Location</th><th>Application</th></tr></thead>
+<tbody>
+<tr>
+<td><strong><a href="https://simplify.jobs/c/Acme">Acme Corp</a></strong></td>
+<td>Software Engineer Intern</td>
+<td><details><summary><strong>2 locations</strong></summary>Austin, TX<br>Remote</details></td>
+<td><a href="https://acme.example/apply">Apply</a></td>
+</tr>
+</tbody>
+</table>
+""".strip()
+
+    internships = gs.parse_markdown_tables(markdown, source_url=SOURCE_URL)
+
+    assert len(internships) == 1
+    assert "Austin, TX" in internships[0]["location"]
+    assert "Remote" in internships[0]["location"]
+
+
+def test_parse_html_and_markdown_tables_in_same_document():
+    markdown = """
+## Section One
+
+| Company | Role | Location | Application |
+|---|---|---|---|
+| Pipe Corp | Backend Intern | Remote | https://pipe.example/apply |
+
+## Section Two
+
+<table>
+<thead><tr><th>Company</th><th>Role</th><th>Location</th><th>Application</th></tr></thead>
+<tbody>
+<tr>
+<td>HTML Corp</td>
+<td>Frontend Intern</td>
+<td>NYC</td>
+<td><a href="https://html.example/apply">Apply</a></td>
+</tr>
+</tbody>
+</table>
+""".strip()
+
+    internships = gs.parse_markdown_tables(markdown, source_url=SOURCE_URL)
+
+    companies = {job["company"] for job in internships}
+    assert companies == {"Pipe Corp", "HTML Corp"}
+
+
+def test_extract_best_url_ignores_html_quote_boundary():
+    cell = '<a href="https://acme.example/apply?ref=x&utm_source=y">Apply</a>'
+    assert gs.extract_best_url(cell) == "https://acme.example/apply?ref=x&utm_source=y"
+
+
 def test_duplicate_rows_in_same_table_are_deduped():
     markdown = """
 | Company | Role | Location | Application |

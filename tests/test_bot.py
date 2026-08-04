@@ -173,7 +173,9 @@ def test_build_personal_digests_filters_by_min_score_and_sorts_desc():
 
     with patch.object(bot_module, "score_personal_match", side_effect=fake_score):
         digests = bot_module.build_personal_digests(
-            jobs, {"u1": "backend"}, {"personal_digest_top_n": 5, "personal_digest_min_score": 4}
+            jobs,
+            {"u1": {"skills": "backend", "target_roles": "", "education_level": "", "location_pref": ""}},
+            {"personal_digest_top_n": 5, "personal_digest_min_score": 4},
         )
 
     assert [j["company"] for j in digests["u1"]] == ["A", "C"]  # 2 excluded (score 2 < 4)
@@ -188,7 +190,9 @@ def test_build_personal_digests_respects_top_n():
         return_value=PersonalMatchResult(match_score=5, reason="r", source="llm"),
     ):
         digests = bot_module.build_personal_digests(
-            jobs, {"u1": "backend"}, {"personal_digest_top_n": 1, "personal_digest_min_score": 1}
+            jobs,
+            {"u1": {"skills": "backend", "target_roles": "", "education_level": "", "location_pref": ""}},
+            {"personal_digest_top_n": 1, "personal_digest_min_score": 1},
         )
 
     assert len(digests["u1"]) == 1

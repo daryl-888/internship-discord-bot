@@ -14,7 +14,7 @@ CONFIG_PATH = ROOT_DIR / "config.json"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "discord_channel_id": "",
-    "scan_interval_minutes": 240,
+    "scan_interval_minutes": 360,
     "auto_scan_enabled": True,
     "auto_scan_on_start": True,
     "max_posts_per_scan": 20,
@@ -42,6 +42,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "full-time",
         "new grad",
     ],
+    # Postings older than this (per the source's Age/Date column, e.g. "3d",
+    # "1mo") are skipped entirely at scan time so the channel doesn't fill up
+    # with stale listings. <= 0 disables this filter.
+    "max_posting_age_days": 3,
     # Optional second-pass filtering/ranking using a local Ollama model. Off by
     # default since it requires a running Ollama server with a model pulled.
     "llm_filter_enabled": False,

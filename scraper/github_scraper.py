@@ -152,6 +152,32 @@ def parse_markdown_tables(markdown: str, source_url: str, raw_url: str = "") -> 
             i += 1
             continue
 
+        if line.lower().startswith("<table"):
+            table_lines = []
+            while i < len(lines):
+                table_lines.append(lines[i])
+                closed = "</table>" in lines[i].lower()
+                i += 1
+                if closed:
+                    break
+
+            new_internships, previous_company = _parse_html_table_rows(
+                "\n".join(table_lines),
+                previous_company=previous_company,
+                source_url=source_url,
+                section=current_section,
+            )
+            for internship in new_internships:
+                key = (
+                    internship["company"].lower(),
+                    internship["title"].lower(),
+                    internship.get("application_url", "").lower(),
+                )
+                if key not in seen_keys:
+                    internships.append(internship)
+                    seen_keys.add(key)
+            continue
+
         if _looks_like_table_start(lines, i):
             header_cells = split_table_row(lines[i])
             normalized_headers = [normalize_header(cell) for cell in header_cells]
@@ -186,6 +212,48 @@ def parse_markdown_tables(markdown: str, source_url: str, raw_url: str = "") -> 
         i += 1
 
     return internships
+
+
+_HTML_ROW_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+_HTML_TH_RE = re.compile(r"<th[^>]*>(.*?)</th>", re.IGNORECASE | re.DOTALL)
+_HTML_TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.IGNORECASE | re.DOTALL)
+
+
+def _parse_html_table_rows(
+    table_html: str, previous_company: str, source_url: str, section: str
+) -> Tuple[List[Dict], str]:
+    """Parse one <table>...</table> block (some repos, e.g. SimplifyJobs,
+    render their listing as raw HTML instead of markdown pipe syntax).
+
+    Reuses parse_table_row's cell handling as-is: extract_display_text and
+    extract_best_url already strip arbitrary HTML tags generically, so a raw
+    <td>...</td> inner-HTML string works as a "cell" without any HTML-specific
+    text extraction.
+    """
+    internships: List[Dict] = []
+    headers: List[str] = []
+
+    for row_html in _HTML_ROW_RE.findall(table_html):
+        header_cells = _HTML_TH_RE.findall(row_html)
+        if header_cells:
+            headers = [normalize_header(extract_display_text(cell)) for cell in header_cells]
+            continue
+
+        cells = _HTML_TD_RE.findall(row_html)
+        if len(cells) < 2:
+            continue
+
+        internship, previous_company = parse_table_row(
+            headers=headers,
+            cells=cells,
+            previous_company=previous_company,
+            source_url=source_url,
+            section=section,
+        )
+        if internship:
+            internships.append(internship)
+
+    return internships, previous_company
 
 
 def _looks_like_table_start(lines: List[str], index: int) -> bool:
@@ -296,11 +364,13 @@ def clean_text(text: str) -> str:
 
 
 def extract_best_url(markdown_cell: str) -> str:
-    urls = re.findall(r"https?://[^)\s>]+", markdown_cell)
+    # Excludes quotes too so this also works on raw HTML cells (href="...")
+    # from parse_html_tables, not just markdown [label](url)/bare-URL cells.
+    urls = re.findall(r"https?://[^)\s>\"']+", markdown_cell)
     if not urls:
         return ""
 
-    cleaned_urls = [url.rstrip(")].,;") for url in urls]
+    cleaned_urls = [url.rstrip(")].,;\"'") for url in urls]
     filtered = []
     for url in cleaned_urls:
         lower = url.lower()
