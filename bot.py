@@ -31,6 +31,7 @@ from scanner import run_scan
 from scraper.jobright_manual import build_manual_jobright_job
 from scraper.linkedin_manual import build_manual_linkedin_job
 from utils.config_loader import load_config, save_config
+from utils.filters import passes_age_filter
 from utils.formatting import chunk_list, internship_to_embed, personal_match_to_embed
 from utils.personalization import format_profile_for_prompt, score_personal_match
 from utils.relevance import NEUTRAL_QUALITY_SCORE
@@ -216,8 +217,13 @@ async def scan_and_post() -> dict:
 
     # Jobs found in an earlier scan but never posted (because that scan hit
     # max_posts_per_scan) are queued here so they get caught up instead of lost.
+    # But a job can also sit unposted long enough to age past max_posting_age_days
+    # by the time it's finally its turn — re-check the same age filter run_scan()
+    # already applied at scrape time, using each job's freshest uploaded_at.
     max_posts = int(config.get("max_posts_per_scan", 20))
+    max_posting_age_days = config.get("max_posting_age_days", 3)
     backlog = get_unposted(limit=max_posts * 5)
+    backlog = [job for job in backlog if passes_age_filter(job, max_posting_age_days)]
     jobs_to_post = _merge_unique_jobs(backlog, result["new_jobs"])
 
     # Best matches first, so when there are more postings than max_posts_per_scan

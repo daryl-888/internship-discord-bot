@@ -98,6 +98,31 @@ def test_post_jobs_to_discord_returns_zero_without_a_configured_channel():
     assert posted_count == 0
 
 
+def test_scan_and_post_drops_backlog_jobs_that_aged_out_since_being_queued():
+    # "Fresh" backlog entry (still under the 3-day cutoff) should survive;
+    # "Stale" was postable when first scraped but has since aged out while
+    # waiting in the unposted backlog, and must not reach Discord.
+    new_jobs = []
+    backlog = [
+        {"id": 1, "company": "Stale", "uploaded_at": "5d"},
+        {"id": 2, "company": "Fresh", "uploaded_at": "1d"},
+    ]
+    posted_order = []
+
+    async def fake_post_jobs_to_discord(jobs):
+        posted_order.extend(job["company"] for job in jobs)
+        return len(jobs)
+
+    with patch.object(bot_module.asyncio, "to_thread", new=AsyncMock(return_value={"new_jobs": new_jobs})), \
+         patch.object(bot_module, "get_unposted", return_value=backlog), \
+         patch.object(bot_module, "post_jobs_to_discord", side_effect=fake_post_jobs_to_discord):
+        bot_module.config["max_posts_per_scan"] = 20
+        bot_module.config["max_posting_age_days"] = 3
+        _run(bot_module.scan_and_post())
+
+    assert posted_order == ["Fresh"]
+
+
 def test_scan_and_post_sorts_merged_jobs_by_quality_before_posting():
     new_jobs = [{"id": 1, "company": "Low"}, {"id": 2, "company": "High", "quality_score": 5}]
     backlog = [{"id": 3, "company": "Mid", "quality_score": 3}]
