@@ -201,3 +201,29 @@ def test_run_storage_maintenance_prunes_and_reports_deleted_count():
 def test_get_db_file_size_bytes_reflects_an_initialized_database():
     db.init_db()
     assert db.get_db_file_size_bytes() > 0
+
+
+def test_add_fast_lane_subscriber_then_list():
+    db.add_fast_lane_subscriber("111")
+    db.add_fast_lane_subscriber("222")
+    assert db.list_fast_lane_subscribers() == ["111", "222"]
+
+
+def test_add_fast_lane_subscriber_is_idempotent():
+    db.add_fast_lane_subscriber("111")
+    db.add_fast_lane_subscriber("111")
+    assert db.list_fast_lane_subscribers() == ["111"]
+
+
+def test_remove_fast_lane_subscriber_returns_true_when_removed():
+    db.add_fast_lane_subscriber("111")
+    assert db.remove_fast_lane_subscriber("111") is True
+    assert db.list_fast_lane_subscribers() == []
+
+
+def test_remove_fast_lane_subscriber_returns_false_when_absent():
+    assert db.remove_fast_lane_subscriber("999") is False
+
+
+def test_list_fast_lane_subscribers_empty_by_default():
+    assert db.list_fast_lane_subscribers() == []

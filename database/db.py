@@ -124,6 +124,14 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fast_lane_subscribers (
+                user_id TEXT PRIMARY KEY,
+                added_at TEXT NOT NULL
+            )
+            """
+        )
         _ensure_column(conn, "member_profiles", "skills", "TEXT")
         _ensure_column(conn, "member_profiles", "target_roles", "TEXT")
         _ensure_column(conn, "member_profiles", "education_level", "TEXT")
@@ -366,6 +374,39 @@ def list_member_profiles() -> Dict[str, Dict[str, str]]:
         row["user_id"]: {field: (row[field] or "") for field in _PROFILE_FIELDS}
         for row in rows
     }
+
+
+def add_fast_lane_subscriber(user_id: str) -> None:
+    """Admin-managed explicit list for the Workday fast lane — see
+    /fast_lane_add. Not a Discord role, unlike premium_role_id."""
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO fast_lane_subscribers(user_id, added_at) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO NOTHING",
+            (str(user_id), now_iso()),
+        )
+        conn.commit()
+
+
+def remove_fast_lane_subscriber(user_id: str) -> bool:
+    init_db()
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM fast_lane_subscribers WHERE user_id = ?",
+            (str(user_id),),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def list_fast_lane_subscribers() -> List[str]:
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT user_id FROM fast_lane_subscribers ORDER BY added_at ASC"
+        ).fetchall()
+    return [row["user_id"] for row in rows]
 
 
 _PRESERVED_STATUSES = {"active", "applied", "saved"}
