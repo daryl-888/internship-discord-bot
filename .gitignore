@@ -2,6 +2,7 @@
 internships.db
 config.json
 sources.json
+watched_companies.json
 __pycache__/
 *.pyc
 .venv/
