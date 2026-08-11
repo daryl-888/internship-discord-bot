@@ -14,6 +14,10 @@ services:
       AUTO_SCAN_ON_START: ${AUTO_SCAN_ON_START:-true}
       MAX_POSTS_PER_SCAN: ${MAX_POSTS_PER_SCAN:-20}
       PYTHONUNBUFFERED: 1
+      # Only used by scraper/workday_scraper.py. Blank (the default when
+      # VPN_WIREGUARD_PRIVATE_KEY is unset, since `vpn` won't start) means no
+      # proxy — the scraper just connects directly, same as before.
+      WORKDAY_PROXY_URL: ${VPN_WIREGUARD_PRIVATE_KEY:+http://vpn:8888}
     volumes:
       # Bind mount for development hot reload
       - ./bot.py:/app/bot.py:ro
@@ -27,6 +31,33 @@ services:
       - internship_data:/app
     env_file:
       - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Dedicated ProtonVPN WireGuard tunnel for scraper/workday_scraper.py only
+  # (see WORKDAY_PROXY_URL above) — separate from and unrelated to the
+  # existing `gluetun` container that qbittorrent/stremio use elsewhere on
+  # this server. Exposes an HTTP proxy on :8888 that only internship-bot
+  # talks to, over this compose project's own network.
+  vpn:
+    image: qmcgaw/gluetun:latest
+    container_name: internship-bot-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${VPN_WIREGUARD_PRIVATE_KEY}
+      WIREGUARD_ADDRESSES: 10.2.0.2/32
+      SERVER_COUNTRIES: United States
+      HTTPPROXY: "on"
+      HTTPPROXY_LISTENING_ADDRESS: :8888
     logging:
       driver: "json-file"
       options:

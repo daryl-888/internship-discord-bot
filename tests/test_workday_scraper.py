@@ -152,6 +152,24 @@ def test_scrape_workday_intern_jobs_filters_out_non_us_postings():
     assert [job["title"] for job in result.internships] == ["US Role"]
 
 
+def test_scrape_workday_intern_jobs_uses_no_proxy_by_default():
+    with patch.object(ws.requests, "post", return_value=_response([])) as mock_post:
+        ws.scrape_workday_intern_jobs(COMPANY)
+
+    assert mock_post.call_args.kwargs["proxies"] is None
+
+
+def test_scrape_workday_intern_jobs_routes_through_configured_proxy(monkeypatch):
+    monkeypatch.setattr(ws, "PROXY_URL", "http://vpn:8888")
+    with patch.object(ws.requests, "post", return_value=_response([])) as mock_post:
+        ws.scrape_workday_intern_jobs(COMPANY)
+
+    assert mock_post.call_args.kwargs["proxies"] == {
+        "http": "http://vpn:8888",
+        "https": "http://vpn:8888",
+    }
+
+
 def test_scrape_workday_intern_jobs_raises_on_http_error():
     error_response = MagicMock()
     error_response.raise_for_status.side_effect = ws.requests.HTTPError("500")

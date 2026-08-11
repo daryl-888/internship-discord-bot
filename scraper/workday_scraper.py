@@ -17,6 +17,7 @@ MAX_PAGES hard cap as a circuit breaker, and never reads "total" at all.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Dict, List
@@ -32,6 +33,12 @@ REQUEST_HEADERS = {
 }
 PAGE_SIZE = 20
 MAX_PAGES = 10
+
+# Routes ONLY this scraper's requests through a dedicated VPN proxy (see
+# docker-compose.yml's `vpn` service) when configured. Blank/unset (the
+# default) means a direct connection, same as before this existed — nothing
+# else in the bot (Discord, GitHub source, Ollama) is affected either way.
+PROXY_URL = os.environ.get("WORKDAY_PROXY_URL", "").strip()
 
 
 @dataclass
@@ -50,6 +57,8 @@ def scrape_workday_intern_jobs(company_config: Dict) -> ScrapeResult:
     tenant_slug = tenant_host.split(".")[0]
     endpoint = f"https://{tenant_host}/wday/cxs/{tenant_slug}/{site}/jobs"
 
+    proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+
     internships: List[Dict] = []
     offset = 0
     for _ in range(MAX_PAGES):
@@ -59,7 +68,9 @@ def scrape_workday_intern_jobs(company_config: Dict) -> ScrapeResult:
             "offset": offset,
             "searchText": "",
         }
-        response = requests.post(endpoint, json=payload, headers=REQUEST_HEADERS, timeout=20)
+        response = requests.post(
+            endpoint, json=payload, headers=REQUEST_HEADERS, timeout=20, proxies=proxies
+        )
         response.raise_for_status()
         postings = response.json().get("jobPostings", [])
 
