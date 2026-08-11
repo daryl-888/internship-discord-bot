@@ -396,28 +396,43 @@ def test_send_fast_lane_alerts_skips_subscriber_missing_from_guild_cache():
         _run(bot_module.send_fast_lane_alerts([{"id": 1, "company": "NVIDIA"}], guild))  # must not raise
 
 
-def test_watched_company_scan_and_post_posts_new_jobs_and_alerts_fast_lane():
+def test_watched_company_scan_and_post_never_touches_shared_channel_or_premium_digest():
     new_jobs = [{"id": 1, "company": "NVIDIA"}]
 
     with patch.object(bot_module.asyncio, "to_thread", new=AsyncMock(return_value={"new_jobs": new_jobs})), \
-         patch.object(bot_module, "post_jobs_to_discord", new=AsyncMock(return_value=1)) as mock_post, \
-         patch.object(bot_module, "send_premium_digests", new=AsyncMock()), \
+         patch.object(bot_module, "post_jobs_to_discord", new=AsyncMock()) as mock_post, \
+         patch.object(bot_module, "send_premium_digests", new=AsyncMock()) as mock_digest, \
+         patch.object(bot_module, "mark_posted") as mock_mark, \
          patch.object(bot_module, "get_premium_guild", return_value=MagicMock()), \
          patch.object(bot_module, "send_fast_lane_alerts", new=AsyncMock()) as mock_alert:
-        result = _run(bot_module.watched_company_scan_and_post())
+        _run(bot_module.watched_company_scan_and_post())
 
-    mock_post.assert_awaited_once_with(new_jobs)
+    mock_post.assert_not_awaited()
+    mock_digest.assert_not_awaited()
     mock_alert.assert_awaited_once()
-    assert result["posted_count"] == 1
+    mock_mark.assert_called_once_with([1])
 
 
-def test_watched_company_scan_and_post_skips_fast_lane_alert_without_a_guild():
+def test_watched_company_scan_and_post_marks_new_jobs_posted_even_without_a_guild():
+    # Otherwise scan_and_post()'s backlog catch-up (get_unposted(), which
+    # ignores source_type) would eventually sweep these into the shared
+    # channel after all — the exact leak this function exists to prevent.
     new_jobs = [{"id": 1, "company": "NVIDIA"}]
     with patch.object(bot_module.asyncio, "to_thread", new=AsyncMock(return_value={"new_jobs": new_jobs})), \
-         patch.object(bot_module, "post_jobs_to_discord", new=AsyncMock(return_value=1)), \
-         patch.object(bot_module, "send_premium_digests", new=AsyncMock()), \
+         patch.object(bot_module, "mark_posted") as mock_mark, \
          patch.object(bot_module, "get_premium_guild", return_value=None), \
          patch.object(bot_module, "send_fast_lane_alerts", new=AsyncMock()) as mock_alert:
         _run(bot_module.watched_company_scan_and_post())
 
+    mock_mark.assert_called_once_with([1])
     mock_alert.assert_not_awaited()
+
+
+def test_watched_company_scan_and_post_skips_mark_posted_when_no_new_jobs():
+    with patch.object(bot_module.asyncio, "to_thread", new=AsyncMock(return_value={"new_jobs": []})), \
+         patch.object(bot_module, "mark_posted") as mock_mark, \
+         patch.object(bot_module, "get_premium_guild", return_value=MagicMock()), \
+         patch.object(bot_module, "send_fast_lane_alerts", new=AsyncMock()):
+        _run(bot_module.watched_company_scan_and_post())
+
+    mock_mark.assert_not_called()

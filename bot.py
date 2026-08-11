@@ -248,30 +248,29 @@ async def send_fast_lane_alerts(new_jobs: List[dict], guild: discord.Guild) -> N
 
 
 async def watched_company_scan_and_post() -> dict:
-    """Scan watched_companies.json (Workday fast lane) and post/alert.
+    """Scan watched_companies.json (Workday fast lane) and DM fast-lane
+    subscribers ONLY — deliberately no shared-channel post and no premium
+    digest. Those belong to scan_and_post()'s pipeline; this tier is a
+    separate, DM-only audience (see /fast_lane_add).
 
-    Deliberately simpler than scan_and_post(): no backlog merge or
-    quality-score sort, since watched-company volume per scan is inherently
-    small (a handful of intern postings per company) and this runs every
-    fast_scan_interval_minutes rather than every scan_interval_minutes, so a
-    backlog is not expected to build up the way it can for GitHub sources.
+    New jobs are marked posted_to_discord immediately even though they were
+    never sent to a channel. Without this, scan_and_post()'s backlog
+    catch-up step (get_unposted(), which pulls any unposted row regardless
+    of source_type) would eventually sweep these into the shared channel
+    after all — the same leak this function exists to avoid.
     """
     result = await asyncio.to_thread(run_watched_company_scan, config)
 
-    posted_count = await post_jobs_to_discord(result["new_jobs"])
-    result["posted_count"] = posted_count
-
-    try:
-        await send_premium_digests(result["new_jobs"])
-    except Exception:
-        LOGGER.exception("Premium digest step failed for watched-company scan; other posting is unaffected")
+    new_job_ids = [job["id"] for job in result["new_jobs"] if "id" in job]
+    if new_job_ids:
+        mark_posted(new_job_ids)
 
     guild = get_premium_guild()
     if guild is not None:
         try:
             await send_fast_lane_alerts(result["new_jobs"], guild)
         except Exception:
-            LOGGER.exception("Fast-lane alert step failed; other posting is unaffected")
+            LOGGER.exception("Fast-lane alert step failed")
 
     return result
 
