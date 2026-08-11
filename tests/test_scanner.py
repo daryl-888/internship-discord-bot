@@ -98,3 +98,59 @@ def test_llm_filter_only_runs_for_new_non_closed_postings():
         _run_with_jobs([_job(status="closed")], _base_config(llm_filter_enabled=True))
 
     mock_classify.assert_not_called()
+
+
+from scraper.workday_scraper import ScrapeResult as WorkdayScrapeResult
+
+
+def _watched_company():
+    return [{
+        "id": "nvidia",
+        "name": "NVIDIA",
+        "tenant_host": "nvidia.wd5.myworkdayjobs.com",
+        "site": "NVIDIAExternalCareerSite",
+        "intern_facet_id": "abc123",
+    }]
+
+
+def _run_watched_with_jobs(jobs, config):
+    with patch("scanner.get_enabled_watched_companies", return_value=_watched_company()), \
+         patch("scanner.scrape_workday_intern_jobs", return_value=WorkdayScrapeResult(internships=jobs)):
+        return scanner.run_watched_company_scan(config)
+
+
+def test_watched_company_scan_stores_and_returns_new_jobs():
+    jobs = [_job(company="NVIDIA")]
+    result = _run_watched_with_jobs(jobs, _base_config())
+
+    assert [j["company"] for j in result["new_jobs"]] == ["NVIDIA"]
+    assert result["companies_scanned"] == 1
+    stored_companies = {row["company"] for row in list_internships(limit=10)}
+    assert stored_companies == {"NVIDIA"}
+
+
+def test_watched_company_scan_applies_same_keyword_filters_as_run_scan():
+    jobs = [_job(company="NVIDIA", title="Senior SWE")]
+    result = _run_watched_with_jobs(jobs, _base_config(exclude_keywords=["senior"]))
+    assert result["new_jobs"] == []
+
+
+def test_watched_company_scan_records_errors_without_stopping():
+    with patch("scanner.get_enabled_watched_companies", return_value=_watched_company()), \
+         patch("scanner.scrape_workday_intern_jobs", side_effect=RuntimeError("boom")):
+        result = scanner.run_watched_company_scan(_base_config())
+
+    assert result["companies_scanned"] == 1
+    assert len(result["errors"]) == 1
+    assert result["errors"][0] == "NVIDIA: boom"
+    assert result["new_jobs"] == []
+
+
+def test_watched_company_scan_runs_llm_filter_when_enabled():
+    jobs = [_job(company="NVIDIA")]
+    verdict = RelevanceResult(relevant=True, quality_score=5, reason="strong match", source="llm")
+
+    with patch("scanner.classify_relevance", return_value=verdict):
+        result = _run_watched_with_jobs(jobs, _base_config(llm_filter_enabled=True, llm_min_quality_score=1))
+
+    assert result["new_jobs"][0]["quality_score"] == 5
