@@ -338,3 +338,86 @@ def test_storage_maintenance_calls_run_storage_maintenance_with_configured_reten
 def test_storage_maintenance_tolerates_internal_errors():
     with patch.object(bot_module, "run_storage_maintenance", side_effect=RuntimeError("disk full")):
         _run(bot_module.storage_maintenance.coro())  # must not raise
+
+
+def test_send_fast_lane_alerts_noop_when_no_new_jobs():
+    guild = MagicMock()
+    with patch.object(bot_module, "list_fast_lane_subscribers") as mock_list:
+        _run(bot_module.send_fast_lane_alerts([], guild))
+    mock_list.assert_not_called()
+
+
+def test_send_fast_lane_alerts_noop_when_no_subscribers():
+    guild = MagicMock()
+    with patch.object(bot_module, "list_fast_lane_subscribers", return_value=[]):
+        _run(bot_module.send_fast_lane_alerts([{"id": 1, "company": "NVIDIA"}], guild))
+    guild.get_member.assert_not_called()
+
+
+def test_send_fast_lane_alerts_dms_each_listed_subscriber():
+    member = MagicMock()
+    member.send = AsyncMock()
+    guild = MagicMock()
+    guild.get_member = lambda uid: member if uid == 111 else None
+
+    with patch.object(bot_module, "list_fast_lane_subscribers", return_value=["111"]):
+        _run(bot_module.send_fast_lane_alerts(
+            [{"id": 1, "company": "NVIDIA", "title": "SWE Intern"}], guild
+        ))
+
+    member.send.assert_awaited_once()
+    assert len(member.send.call_args.kwargs["embeds"]) == 1
+
+
+def test_send_fast_lane_alerts_skips_forbidden_member_but_continues_others():
+    class _Forbidden403:
+        status = 403
+        reason = "Forbidden"
+        headers = {}
+
+    blocked = MagicMock()
+    blocked.send = AsyncMock(side_effect=discord.Forbidden(_Forbidden403(), "DMs closed"))
+    ok = MagicMock()
+    ok.send = AsyncMock()
+    guild = MagicMock()
+    guild.get_member = lambda uid: {111: blocked, 222: ok}.get(uid)
+
+    with patch.object(bot_module, "list_fast_lane_subscribers", return_value=["111", "222"]):
+        _run(bot_module.send_fast_lane_alerts([{"id": 1, "company": "NVIDIA"}], guild))
+
+    blocked.send.assert_awaited_once()
+    ok.send.assert_awaited_once()
+
+
+def test_send_fast_lane_alerts_skips_subscriber_missing_from_guild_cache():
+    guild = MagicMock()
+    guild.get_member = lambda uid: None
+    with patch.object(bot_module, "list_fast_lane_subscribers", return_value=["999"]):
+        _run(bot_module.send_fast_lane_alerts([{"id": 1, "company": "NVIDIA"}], guild))  # must not raise
+
+
+def test_watched_company_scan_and_post_posts_new_jobs_and_alerts_fast_lane():
+    new_jobs = [{"id": 1, "company": "NVIDIA"}]
+
+    with patch.object(bot_module.asyncio, "to_thread", new=AsyncMock(return_value={"new_jobs": new_jobs})), \
+         patch.object(bot_module, "post_jobs_to_discord", new=AsyncMock(return_value=1)) as mock_post, \
+         patch.object(bot_module, "send_premium_digests", new=AsyncMock()), \
+         patch.object(bot_module, "get_premium_guild", return_value=MagicMock()), \
+         patch.object(bot_module, "send_fast_lane_alerts", new=AsyncMock()) as mock_alert:
+        result = _run(bot_module.watched_company_scan_and_post())
+
+    mock_post.assert_awaited_once_with(new_jobs)
+    mock_alert.assert_awaited_once()
+    assert result["posted_count"] == 1
+
+
+def test_watched_company_scan_and_post_skips_fast_lane_alert_without_a_guild():
+    new_jobs = [{"id": 1, "company": "NVIDIA"}]
+    with patch.object(bot_module.asyncio, "to_thread", new=AsyncMock(return_value={"new_jobs": new_jobs})), \
+         patch.object(bot_module, "post_jobs_to_discord", new=AsyncMock(return_value=1)), \
+         patch.object(bot_module, "send_premium_digests", new=AsyncMock()), \
+         patch.object(bot_module, "get_premium_guild", return_value=None), \
+         patch.object(bot_module, "send_fast_lane_alerts", new=AsyncMock()) as mock_alert:
+        _run(bot_module.watched_company_scan_and_post())
+
+    mock_alert.assert_not_awaited()

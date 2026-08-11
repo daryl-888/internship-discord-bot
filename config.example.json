@@ -1,6 +1,7 @@
 {
   "discord_channel_id": "",
   "scan_interval_minutes": 240,
+  "fast_scan_interval_minutes": 10,
   "auto_scan_enabled": true,
   "auto_scan_on_start": true,
   "max_posts_per_scan": 20,

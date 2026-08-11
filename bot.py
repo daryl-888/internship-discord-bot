@@ -16,18 +16,21 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from database.db import (
+    add_fast_lane_subscriber,
     get_db_file_size_bytes,
     get_member_profile,
     get_unposted,
     init_db,
+    list_fast_lane_subscribers,
     list_member_profiles,
     mark_posted,
+    remove_fast_lane_subscriber,
     run_storage_maintenance,
     set_member_profile,
     stats,
     upsert_internship,
 )
-from scanner import run_scan
+from scanner import run_scan, run_watched_company_scan
 from scraper.jobright_manual import build_manual_jobright_job
 from scraper.linkedin_manual import build_manual_linkedin_job
 from utils.config_loader import load_config, save_config
@@ -36,6 +39,7 @@ from utils.formatting import chunk_list, internship_to_embed, personal_match_to_
 from utils.personalization import format_profile_for_prompt, score_personal_match
 from utils.relevance import NEUTRAL_QUALITY_SCORE
 from utils.source_store import add_source, load_sources, remove_source
+from utils.watched_companies_store import get_enabled_watched_companies, load_watched_companies
 
 logging.basicConfig(
     level=logging.INFO,
@@ -210,6 +214,68 @@ async def send_premium_digests(new_jobs: List[dict]) -> None:
         await send_personal_digests(digests, guild)
 
 
+async def send_fast_lane_alerts(new_jobs: List[dict], guild: discord.Guild) -> None:
+    """Instant DM to an admin-managed explicit subscriber list (see
+    /fast_lane_add) for postings from watched_companies.json. Separate from
+    and in addition to the premium personal digest — no Discord role, no LLM
+    scoring, no /set_profile dependency. The whole point of this tier is
+    speed for a short explicit list, not personalization for a broad one.
+    """
+    if not new_jobs:
+        return
+
+    subscriber_ids = list_fast_lane_subscribers()
+    if not subscriber_ids:
+        return
+
+    embeds = [internship_to_embed(job) for job in new_jobs]
+    for user_id in subscriber_ids:
+        member = guild.get_member(int(user_id))
+        if member is None:
+            LOGGER.warning("Fast-lane subscriber %s not found in guild cache; skipping", user_id)
+            continue
+
+        for index, batch in enumerate(chunk_list(embeds, 5)):
+            content = "🚨 Fast-lane alert: new watched-company internship posted:" if index == 0 else None
+            try:
+                await member.send(content=content, embeds=batch)
+            except discord.Forbidden:
+                LOGGER.warning("Could not DM fast-lane subscriber %s (DMs closed); skipping", user_id)
+                break
+            except discord.HTTPException:
+                LOGGER.exception("Failed to send a fast-lane alert batch to %s", user_id)
+                continue
+
+
+async def watched_company_scan_and_post() -> dict:
+    """Scan watched_companies.json (Workday fast lane) and post/alert.
+
+    Deliberately simpler than scan_and_post(): no backlog merge or
+    quality-score sort, since watched-company volume per scan is inherently
+    small (a handful of intern postings per company) and this runs every
+    fast_scan_interval_minutes rather than every scan_interval_minutes, so a
+    backlog is not expected to build up the way it can for GitHub sources.
+    """
+    result = await asyncio.to_thread(run_watched_company_scan, config)
+
+    posted_count = await post_jobs_to_discord(result["new_jobs"])
+    result["posted_count"] = posted_count
+
+    try:
+        await send_premium_digests(result["new_jobs"])
+    except Exception:
+        LOGGER.exception("Premium digest step failed for watched-company scan; other posting is unaffected")
+
+    guild = get_premium_guild()
+    if guild is not None:
+        try:
+            await send_fast_lane_alerts(result["new_jobs"], guild)
+        except Exception:
+            LOGGER.exception("Fast-lane alert step failed; other posting is unaffected")
+
+    return result
+
+
 async def scan_and_post() -> dict:
     # Scanning does blocking network I/O; run it off the event loop so the bot
     # keeps responding to Discord (heartbeats, other commands) while it scans.
@@ -268,6 +334,12 @@ async def on_ready() -> None:
         scheduled_scan.change_interval(minutes=int(config.get("scan_interval_minutes", 240)))
         scheduled_scan.start()
 
+    if config.get("auto_scan_enabled") and not scheduled_watched_company_scan.is_running():
+        scheduled_watched_company_scan.change_interval(
+            minutes=int(config.get("fast_scan_interval_minutes", 10))
+        )
+        scheduled_watched_company_scan.start()
+
     if config.get("uptime_kuma_push_url") and not heartbeat.is_running():
         heartbeat.change_interval(minutes=int(config.get("heartbeat_interval_minutes", 5)))
         heartbeat.start()
@@ -282,9 +354,13 @@ async def on_ready() -> None:
         LOGGER.info("auto_scan_on_start is enabled. Running first scan.")
         try:
             await scan_and_post()
-            startup_scan_completed = True
         except Exception:
             LOGGER.exception("Startup scan failed")
+        try:
+            await watched_company_scan_and_post()
+        except Exception:
+            LOGGER.exception("Startup watched-company scan failed")
+        startup_scan_completed = True
 
 
 @tasks.loop(minutes=240)
@@ -299,6 +375,20 @@ async def scheduled_scan() -> None:
 @scheduled_scan.before_loop
 async def before_scheduled_scan() -> None:
     await asyncio.sleep(int(config.get("scan_interval_minutes", 240)) * 60)
+
+
+@tasks.loop(minutes=10)
+async def scheduled_watched_company_scan() -> None:
+    try:
+        LOGGER.info("Running scheduled watched-company (fast-lane) scan")
+        await watched_company_scan_and_post()
+    except Exception:
+        LOGGER.exception("Scheduled watched-company scan failed")
+
+
+@scheduled_watched_company_scan.before_loop
+async def before_scheduled_watched_company_scan() -> None:
+    await asyncio.sleep(int(config.get("fast_scan_interval_minutes", 10)) * 60)
 
 
 @tasks.loop(minutes=5)
@@ -436,6 +526,52 @@ async def set_premium_role_command(interaction: discord.Interaction, role: disco
     )
 
 
+@bot.tree.command(
+    name="fast_lane_add",
+    description="Add a member to the fast-lane instant-DM list for watched companies (admin only).",
+)
+@app_commands.describe(member="The member to add")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def fast_lane_add_command(interaction: discord.Interaction, member: discord.Member) -> None:
+    add_fast_lane_subscriber(str(member.id))
+    await interaction.response.send_message(
+        f"Added {member.mention} to the fast-lane list. They'll get an instant DM when a watched "
+        "company (see watched_companies.json) posts a new internship.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="fast_lane_remove",
+    description="Remove a member from the fast-lane instant-DM list (admin only).",
+)
+@app_commands.describe(member="The member to remove")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def fast_lane_remove_command(interaction: discord.Interaction, member: discord.Member) -> None:
+    removed = remove_fast_lane_subscriber(str(member.id))
+    if removed:
+        await interaction.response.send_message(f"Removed {member.mention} from the fast-lane list.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"{member.mention} wasn't on the fast-lane list.", ephemeral=True)
+
+
+@bot.tree.command(
+    name="fast_lane_list",
+    description="Show who's on the fast-lane instant-DM list (admin only).",
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def fast_lane_list_command(interaction: discord.Interaction) -> None:
+    subscriber_ids = list_fast_lane_subscribers()
+    if not subscriber_ids:
+        await interaction.response.send_message("No fast-lane subscribers yet. Use /fast_lane_add.", ephemeral=True)
+        return
+    lines = [f"<@{user_id}>" for user_id in subscriber_ids]
+    await interaction.response.send_message("Fast-lane subscribers:\n" + "\n".join(lines), ephemeral=True)
+
+
 class ProfileModal(discord.ui.Modal, title="Set Your Internship Profile"):
     skills = discord.ui.TextInput(
         label="Skills / interests",
@@ -538,6 +674,10 @@ async def status_command(interaction: discord.Interaction) -> None:
         f"Scan on startup: `{config.get('auto_scan_on_start')}`\n"
         f"LLM relevance filter: `{config.get('llm_filter_enabled', False)}`\n"
         f"Premium role: `{'configured' if config.get('premium_role_id') else 'not set'}`\n"
+        f"Fast-lane scan: every `{config.get('fast_scan_interval_minutes', 10)}` minutes, "
+        f"`{len(list_fast_lane_subscribers())}` subscriber(s)\n"
+        f"Watched companies: `{len(get_enabled_watched_companies())}` enabled / "
+        f"`{len(load_watched_companies())}` total\n"
         f"Uptime Kuma heartbeat: `{'enabled' if heartbeat.is_running() else 'disabled'}`\n"
         f"Sources: `{len(enabled_sources)}` enabled / `{len(sources)}` total\n"
         f"Last scan: `{current_stats['last_scan_time']}`\n"
@@ -604,6 +744,9 @@ async def help_command(interaction: discord.Interaction) -> None:
         "`/status` — show bot status and database stats\n"
         "`/add_manual_job <source> <url> [company] [title] [location]` — admin: save LinkedIn/Jobright links manually\n"
         "`/set_premium_role <role>` — admin: set which role gets personalized DM digests\n"
+        "`/fast_lane_add <member>` — admin: add a member to the instant-DM list for watched companies\n"
+        "`/fast_lane_remove <member>` — admin: remove a member from that list\n"
+        "`/fast_lane_list` — admin: show current fast-lane subscribers\n"
         "`/set_profile` — premium members: fill out a short form (skills, target roles, "
         "education level, location) for personalized matching\n"
         "`/my_profile` — show your saved profile and premium status\n"

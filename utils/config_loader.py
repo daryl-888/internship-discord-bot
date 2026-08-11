@@ -15,6 +15,10 @@ CONFIG_PATH = ROOT_DIR / "config.json"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "discord_channel_id": "",
     "scan_interval_minutes": 360,
+    # Separate, much shorter cadence for watched_companies.json (Workday
+    # fast lane) — see fast_lane_subscribers / /fast_lane_add. Independent
+    # of scan_interval_minutes/auto_scan_enabled's GitHub-source cadence.
+    "fast_scan_interval_minutes": 10,
     "auto_scan_enabled": True,
     "auto_scan_on_start": True,
     "max_posts_per_scan": 20,

@@ -21,6 +21,7 @@ services:
       - ./config.json:/app/config.json
       - ./database:/app/database:ro
       - ./scraper:/app/scraper:ro
+      - ./watched_companies.json:/app/watched_companies.json:ro
       - ./utils:/app/utils:ro
       # Persist database and config across restarts
       - internship_data:/app
