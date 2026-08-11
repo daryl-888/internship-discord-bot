@@ -17,11 +17,16 @@ COMPANY = {
 }
 
 
-def _posting(title="SWE Intern, Fall 2026", posted_on="Posted Today", external_path="/job/US-CA/SWE-Intern_JR1"):
+def _posting(
+    title="SWE Intern, Fall 2026",
+    posted_on="Posted Today",
+    external_path="/job/US-CA/SWE-Intern_JR1",
+    locations_text="US, CA, Santa Clara",
+):
     return {
         "title": title,
         "externalPath": external_path,
-        "locationsText": "US, CA, Santa Clara",
+        "locationsText": locations_text,
         "postedOn": posted_on,
         "bulletFields": ["JR1"],
     }
@@ -119,6 +124,32 @@ def test_scrape_workday_intern_jobs_empty_first_page_returns_no_internships():
 
     assert result.internships == []
     assert mock_post.call_count == 1
+
+
+def test_is_us_location_matches_common_country_labels():
+    assert ws._is_us_location("US, CA, Santa Clara") is True
+    assert ws._is_us_location("USA, NY, New York") is True
+    assert ws._is_us_location("United States, TX, Austin") is True
+    assert ws._is_us_location("United States of America, WA, Seattle") is True
+
+
+def test_is_us_location_rejects_non_us_and_empty():
+    assert ws._is_us_location("Taiwan, Taipei") is False
+    assert ws._is_us_location("China, Shanghai") is False
+    assert ws._is_us_location("") is False
+    assert ws._is_us_location(None) is False
+
+
+def test_scrape_workday_intern_jobs_filters_out_non_us_postings():
+    postings = [
+        _posting(title="US Role", external_path="/job/us-role", locations_text="US, CA, Santa Clara"),
+        _posting(title="Taiwan Role", external_path="/job/tw-role", locations_text="Taiwan, Taipei"),
+        _posting(title="China Role", external_path="/job/cn-role", locations_text="China, Shanghai"),
+    ]
+    with patch.object(ws.requests, "post", return_value=_response(postings, total=3)):
+        result = ws.scrape_workday_intern_jobs(COMPANY)
+
+    assert [job["title"] for job in result.internships] == ["US Role"]
 
 
 def test_scrape_workday_intern_jobs_raises_on_http_error():

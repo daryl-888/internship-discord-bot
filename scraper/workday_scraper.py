@@ -64,6 +64,8 @@ def scrape_workday_intern_jobs(company_config: Dict) -> ScrapeResult:
         postings = response.json().get("jobPostings", [])
 
         for posting in postings:
+            if not _is_us_location(posting.get("locationsText", "")):
+                continue
             internships.append(_build_internship(posting, company_name, careers_url))
 
         if len(postings) < PAGE_SIZE:
@@ -71,6 +73,22 @@ def scrape_workday_intern_jobs(company_config: Dict) -> ScrapeResult:
         offset += PAGE_SIZE
 
     return ScrapeResult(internships=internships)
+
+
+_US_COUNTRY_LABELS = {"us", "usa", "united states", "united states of america"}
+
+
+def _is_us_location(locations_text: str) -> bool:
+    """Workday's locationsText leads with the country ("US, CA, Santa Clara"
+    vs. "Taiwan, Taipei") — verified against NVIDIA's tenant on 2026-08-11.
+    Postings with an empty/unrecognized location are treated as non-US
+    rather than let through, since the whole point of this filter is to
+    only surface US roles.
+    """
+    if not locations_text:
+        return False
+    country = locations_text.split(",")[0].strip().lower()
+    return country in _US_COUNTRY_LABELS
 
 
 def _build_internship(posting: Dict, company_name: str, careers_url: str) -> Dict:
