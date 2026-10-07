@@ -180,3 +180,14 @@ def test_scrape_workday_intern_jobs_raises_on_http_error():
             assert False, "expected HTTPError to propagate"
         except ws.requests.HTTPError:
             pass
+
+def test_is_us_location_accepts_city_state_without_country_prefix():
+    assert ws._is_us_location("Boise, ID - ID1") is True
+    assert ws._is_us_location("Richardson, TX") is True
+    assert ws._is_us_location("Folsom, CA") is True
+
+
+def test_is_us_location_rejects_city_country_without_state_code():
+    assert ws._is_us_location("Fab 10N/X, Singapore") is False
+    assert ws._is_us_location("Taichung - MTB, Taiwan") is False
+    assert ws._is_us_location("Penang, Malaysia - Grande") is False

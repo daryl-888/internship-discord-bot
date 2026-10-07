@@ -87,6 +87,7 @@ def scrape_workday_intern_jobs(company_config: Dict) -> ScrapeResult:
 
 
 _US_COUNTRY_LABELS = {"us", "usa", "united states", "united states of america"}
+_US_STATE_RE = re.compile(r"(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)(?![A-Za-z])")
 
 
 def _is_us_location(locations_text: str) -> bool:
@@ -99,7 +100,14 @@ def _is_us_location(locations_text: str) -> bool:
     if not locations_text:
         return False
     country = locations_text.split(",")[0].strip().lower()
-    return country in _US_COUNTRY_LABELS
+    if country in _US_COUNTRY_LABELS:
+        return True
+    # Some tenants (e.g. Micron) omit the country and lead with the city,
+    # like "Boise, ID - ID1" or "Richardson, TX". Accept a second segment
+    # that starts with a US state code. Non-US "City, Country" text never
+    # matches because country names aren't two-letter codes.
+    match = _US_STATE_RE.match(locations_text.split(",", 1)[1].strip()) if "," in locations_text else None
+    return bool(match)
 
 
 def _build_internship(posting: Dict, company_name: str, careers_url: str) -> Dict:
